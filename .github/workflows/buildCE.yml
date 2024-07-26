@@ -12,6 +12,10 @@ on:
         value: ${{ jobs.get-paths.outputs.vs2013 }}
       xp:
         value: ${{ jobs.get-paths.outputs.xp }}
+      vc141:
+        value: ${{ jobs.get-paths.outputs.vc141 }}
+      win10sdk:
+        value: ${{ jobs.get-paths.outputs.win10sdk }}
   push:
     branches:
       - master
@@ -44,7 +48,7 @@ jobs:
             -Regex '(?<=<PackageName Value=").*?(?="\/>)'
       - name: Cache Lazarus
         id: cache-lazarus
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           lookup-only: true
           path: ${{ github.workspace }}\work
@@ -69,7 +73,7 @@ jobs:
         if: steps.cache-lazarus.outputs.cache-hit != 'true'
         run: ${{ github.workspace }}\.github\workflows\scripts\RunInstaller.ps1 -InstallerFile .\32bit.exe -Arguments '/VERYSILENT /DIR=${{ github.workspace }}\work\lazarus'
         working-directory: ${{ github.workspace }}\work
-  cache-xp:
+  cache-xp-vc141:
     runs-on: windows-2022
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !inputs.info-only }}
     needs: get-paths
@@ -79,15 +83,16 @@ jobs:
         shell: cmd
         run: echo C:\Program Files\Git\usr\bin>>"%GITHUB_PATH%"
       - name: Cache XP
-        id: cache-xp
-        uses: actions/cache@v3
+        id: cache-xp-vc141
+        uses: actions/cache@v4
         with:
           lookup-only: true
-          path: ${{ needs.get-paths.outputs.xp }}
-          key: XP
+          path: |
+            ${{ needs.get-paths.outputs.xp }}${{ needs.get-paths.outputs.vc141 }}
+          key: XP-VC141
       - name: Install winxp component on windows 2022
-        if: steps.cache-xp.outputs.cache-hit != 'true'
-        run: .\InstallWinXpComponent.ps1
+        if: steps.cache-xp-vc141.outputs.cache-hit != 'true'
+        run: .\InstallWinXpAndVC141Component.ps1
         working-directory: ${{ github.workspace }}\.github\workflows\scripts
   cache-vs2013:
     runs-on: windows-2022
@@ -100,7 +105,7 @@ jobs:
         run: echo C:\Program Files\Git\usr\bin>>"%GITHUB_PATH%"
       - name: Cache VS2013
         id: cache-vs2013
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           lookup-only: true
           path: ${{ needs.get-paths.outputs.vs2013 }}
@@ -124,7 +129,7 @@ jobs:
         run: echo C:\Program Files\Git\usr\bin>>"%GITHUB_PATH%"
       - name: Cache DirectX
         id: cache-directx
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           lookup-only: true
           path: C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)
@@ -145,7 +150,7 @@ jobs:
         run: echo C:\Program Files\Git\usr\bin>>"%GITHUB_PATH%"
       - name: Cache NETDevPack461
         id: cache-netdevpack461
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           lookup-only: true
           path: ${{ github.workspace }}\ndp461-devpack-kb3105179-enu.exe
@@ -163,7 +168,7 @@ jobs:
         run: echo C:\Program Files\Git\usr\bin>>"%GITHUB_PATH%"
       - name: Cache NetDevPack472
         id: cache-netdevpack472
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           lookup-only: true
           path: C:\Program Files (x86)\Windows Kits\NETFXSDK\4.7.2
@@ -198,7 +203,7 @@ jobs:
         working-directory: ${{ github.workspace }}\.github\workflows\scripts
       - name: Cache Cheat Engine
         id: cache-cheat-engine
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           lookup-only: true
           path: C:\Program Files\Cheat Engine ${{ steps.get-info.outputs.ce }}
@@ -239,37 +244,58 @@ jobs:
       - name: Install Cheat Engine
         if: steps.cache-cheat-engine.outputs.cache-hit != 'true'
         run: ${{ github.workspace }}\.github\workflows\scripts\RunInstaller.ps1 -InstallerFile .\CheatEngineExtracted.exe -Arguments '/VERYSILENT /ZBDIST'
-  cache-cuda:
+  cache-windowssdk:
     runs-on: windows-2022
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !inputs.info-only }}
     needs: get-paths
+    outputs:
+      installed: ${{ steps.check-installed.outputs.isinstalled }}
     steps:
       - uses: actions/checkout@v4
       - name: Use GNU tar
         shell: cmd
         run: echo C:\Program Files\Git\usr\bin>>"%GITHUB_PATH%"
-      - name: Cache CUDA
-        id: cache-cuda
-        uses: actions/cache@v3
+      - name: Check if already installed
+        id: check-installed
+        run: |
+          ${{ github.workspace }}\.github\workflows\scripts\RegKeyExists.ps1 `
+            -OutputName isinstalled `
+            -RegPath 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Kits\Installed Roots\10.0.17763.0'
+      - name: Cache Windows SDK
+        if: ${{ !steps.check-installed.outputs.isinstalled }}
+        id: cache-windows-sdk
+        uses: actions/cache@v4
         with:
           lookup-only: true
-          path: ${{ needs.get-paths.outputs.cuda }}
-          key: CUDA
-      - name: Install CUDA
-        if: steps.cache-cuda.outputs.cache-hit != 'true'
-        uses: Jimver/cuda-toolkit@v0.2.11
-        id: cuda-toolkit
+          path: ${{ needs.get-paths.outputs.win10sdk }}
+          key: Win10SDK
+      - name: Install Windows SDK
+        if: ${{ !steps.check-installed.outputs.isinstalled && steps.cache-windows-sdk.outputs.cache-hit != 'true' }}
+        uses: ChristopheLav/windows-sdk-install@v1
         with:
-          cuda: '12.2.0'
-          use-github-cache: false
-      - name: Save CUDA Path
-        if: steps.cache-cuda.outputs.cache-hit != 'true'
-        run: |
-          ${{ github.workspace }}\.github\workflows\scripts\WriteToFile.ps1 `
-            -Var '${{ steps.cuda-toolkit.outputs.CUDA_PATH }}' `
-            -OutputPath ${{ github.workspace }}\CUDA
+          version-sdk: 17763
+          features: 'OptionId.KitsConfiguration,OptionId.WindowsSDKEULA,OptionId.MSIInstallTools,OptionId.SigningTools,OptionId.UWPManaged,OptionId.UWPCPP,OptionId.DesktopCPPx86,OptionId.DesktopCPPx64'
+  cache-wsl:
+    runs-on: windows-2022
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !inputs.info-only }}
+    steps:
+      - name: Use GNU tar
+        shell: cmd
+        run: echo C:\Program Files\Git\usr\bin>>"%GITHUB_PATH%"
+      - name: Check WSL Debian Cache
+        id: debian-cache
+        uses: actions/cache/restore@v4
+        with:
+          lookup-only: true
+          path: dummy
+          key: 2:distributionDirectory_Debian_1.0.0
+      - name: Setup WSL
+        if: steps.debian-cache.outputs.cache-hit != 'true'
+        uses: Vampire/setup-wsl@v3
+        with:
+          distribution: Debian
   build:
-    needs: [cache-lazarus, cache-vs2013, cache-xp, cache-directx, cache-netdevpack461, cache-netdevpack472, cache-ce-orig, cache-cuda, get-paths]
+    needs: [cache-lazarus, cache-vs2013, cache-xp-vc141, cache-directx, cache-netdevpack461, cache-netdevpack472, cache-ce-orig, cache-windowssdk, cache-wsl, get-paths]
     runs-on: windows-2022
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !inputs.info-only }}
     steps:
@@ -300,7 +326,7 @@ jobs:
             -Regex 'Download Cheat Engine (?<version>[0-9.]+)' `
             -RegexGroup version
       - name: Load Lazarus Cache
-        uses: actions/cache@v3
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}\work
           key: lazarus-${{ steps.get-info.outputs.lazarus }}-${{ steps.get-info.outputs.fpc }}-${{ format(steps.get-info.outputs.dependencies, '_') }}
@@ -377,7 +403,7 @@ jobs:
         run: lazbuild --build-mode="release rtmod" --no-write-project "Cheat Engine/launcher/cheatengine.lpi"
       - name: Load VS2013 Cache
         if: ${{ success() || failure() }}
-        uses: actions/cache@v3
+        uses: actions/cache/restore@v4
         with:
           path: ${{ needs.get-paths.outputs.vs2013 }}
           key: VS2013
@@ -388,14 +414,14 @@ jobs:
         working-directory: ${{ github.workspace }}\.github\workflows\scripts
       - name: Load DirectX Cache
         if: ${{ success() || failure() }}
-        uses: actions/cache@v3
+        uses: actions/cache/restore@v4
         with:
           path: C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)
           key: DirectX
           fail-on-cache-miss: true
       - name: Add msbuild to PATH
         if: ${{ success() || failure() }}
-        uses: microsoft/setup-msbuild@v1
+        uses: microsoft/setup-msbuild@v2
       - name: Build 32-Bit Direct x mess
         if: ${{ success() || failure() }}
         run: "msbuild -property:Configuration=Release -property:Platform=Win32"
@@ -406,18 +432,23 @@ jobs:
         working-directory: ${{ github.workspace }}\Cheat Engine\Direct x mess
       - name: Load XP Cache
         if: ${{ success() || failure() }}
-        uses: actions/cache@v3
+        uses: actions/cache/restore@v4
         with:
-          path: ${{ needs.get-paths.outputs.xp }}
-          key: XP
+          path: |
+            ${{ needs.get-paths.outputs.xp }}${{ needs.get-paths.outputs.vc141 }}
+          key: XP-VC141
           fail-on-cache-miss: true
       - name: Apply XP reg
         if: ${{ success() || failure() }}
         run: regedit /s xp.reg
         working-directory: ${{ github.workspace }}\.github\workflows\scripts
+      - name: Apply VC141 reg
+        if: ${{ success() || failure() }}
+        run: regedit /s vc141.reg
+        working-directory: ${{ github.workspace }}\.github\workflows\scripts
       - name: Load NETDevPack461 Cache
         if: ${{ success() || failure() }}
-        uses: actions/cache@v3
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}\ndp461-devpack-kb3105179-enu.exe
           key: NETDevPack461
@@ -439,7 +470,7 @@ jobs:
         working-directory: ${{ github.workspace }}\Cheat Engine\MonoDataCollector
       - name: Load NetDevPack472 Cache
         if: ${{ success() || failure() }}
-        uses: actions/cache@v3
+        uses: actions/cache/restore@v4
         with:
           path: C:\Program Files (x86)\Windows Kits\NETFXSDK\4.7.2
           key: NetDevPack472
@@ -456,6 +487,18 @@ jobs:
         if: ${{ success() || failure() }}
         run: "msbuild -property:Configuration=Release"
         working-directory: ${{ github.workspace }}\Cheat Engine\DotNetInvasiveDataCollector\DotNetInterface2
+      - name: Load Win10SDK Cache if not installed
+        if: ${{ (success() && !needs.cache-windowssdk.outputs.installed) || (failure() && !needs.cache-windowssdk.outputs.installed) }}
+        uses: actions/cache/restore@v4
+        id: load-windows-sdk
+        with:
+          path: ${{ needs.get-paths.outputs.win10sdk }}
+          key: Win10SDK
+          fail-on-cache-miss: false
+      - name: Apply Win10SDK reg if not installed
+        if: ${{ (success() && !needs.cache-windowssdk.outputs.installed && steps.load-windows-sdk.outputs.cache-hit == 'true') || (failure() && !needs.cache-windowssdk.outputs.installed && steps.load-windows-sdk.outputs.cache-hit == 'true') }}
+        run: regedit /s winsdk.reg
+        working-directory: ${{ github.workspace }}\.github\workflows\scripts
       - name: Build Tcc 32-32
         if: ${{ success() || failure() }}
         run: "msbuild -property:Configuration='Output to 32 (Release)' -property:Platform=Win32"
@@ -480,19 +523,50 @@ jobs:
         if: ${{ success() || failure() }}
         run: "msbuild -property:Configuration='Output to 64 Linux ABI (Release)' -property:Platform=x64"
         working-directory: ${{ github.workspace }}\Cheat Engine\tcclib\win32\tcc
+      - name: Setup WSL
+        if: ${{ success() || failure() }}
+        uses: Vampire/setup-wsl@v3
+        with:
+          distribution: Debian
+          update: 'true'
+          wsl-conf: |
+            [boot]
+            command = dpkg --add-architecture i386
+          additional-packages:
+            gcc-multilib
+            build-essential
+            zlib1g-dev
+            zlib1g-dev:i386
+      - name: Build ceserver
+        if: ${{ success() || failure() }}
+        shell: wsl-bash {0}
+        run: make -f makefile32 && rm -rf obj && mv ceserver ceserver32 && make
+        working-directory: ${{ github.workspace }}\Cheat Engine\ceserver\gcc
+      - name: Prepare ceserver android
+        if: ${{ success() || failure() }}
+        run: ren "Cheat Engine" Cheat_Engine
+      - name: Build ceserver android
+        if: ${{ success() || failure() }}
+        run: '& "$env:ANDROID_NDK\ndk-build"'
+        working-directory: ${{ github.workspace }}\Cheat_Engine\ceserver\ndk-build\EXECUTABLE\jni
+      - name: Post ceserver android
+        if: ${{ success() || failure() }}
+        run: ren Cheat_Engine "Cheat Engine"
+      - name: Build Kernelmoduleunloader
+        if: ${{ success() || failure() }}
+        run: lazbuild --no-write-project "Cheat Engine/dbk32/Kernelmodule unloader/Kernelmoduleunloader.lpi"
       - name: Add plugins
         if: ${{ success() || failure() }}
         run: xcopy plugin bin\plugins\ /E/H
         working-directory: ${{ github.workspace }}\Cheat Engine
-# todo: build cuda pointerscan (don't forget to apply reg)
-# todo: maybe build dbk32
 # todo: dl vmdisk from cheat engine site or maybe build dbvm
+# todo: build lua53
 # todo: maybe build kernelmoduleloader
 # todo: build cejvmti
 # todo: build both standalonelevel in sfx
       - name: Load Cheat Engine Cache
         if: ${{ success() || failure() }}
-        uses: actions/cache@v3
+        uses: actions/cache/restore@v4
         with:
           path: C:\Program Files\Cheat Engine ${{ steps.get-info.outputs.ce }}
           key: CheatEngine${{ steps.get-info.outputs.ce }}
@@ -522,12 +596,34 @@ jobs:
         if: ${{ success() || failure() }}
         run: 7z a -tzip release.zip * -r
         working-directory: "./Cheat Engine/bin"
+      - name: Zip ceserver artifact
+        if: ${{ success() || failure() }}
+        run: 7z a -tzip ceserver-android.zip * -r
+        working-directory: "./Cheat Engine/ceserver/ndk-build/EXECUTABLE/libs"
       - name: Release artifact
         if: ${{ success() || failure() }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Release
           path: "Cheat Engine/bin/release.zip"
+      - name: Ceserver artifact
+        if: ${{ success() || failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ceserver
+          path: "Cheat Engine/ceserver/gcc/ceserver"
+      - name: Ceserver32 artifact
+        if: ${{ success() || failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ceserver32
+          path: "Cheat Engine/ceserver/gcc/ceserver32"
+      - name: Ceserver Android artifact
+        if: ${{ success() || failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ceserver-android
+          path: "Cheat Engine/ceserver/ndk-build/EXECUTABLE/libs/ceserver-android.zip"
       - name: Send failure webhook
         if: ${{ failure() }}
         uses: sebastianpopp/discord-action@releases/v2
@@ -544,7 +640,7 @@ jobs:
           allowUpdates: true
           removeArtifacts: true
           omitPrereleaseDuringUpdate: true
-          artifacts: "Cheat Engine/bin/release.zip"
+          artifacts: "Cheat Engine/bin/release.zip,Cheat Engine/ceserver/gcc/ceserver*,Cheat Engine/ceserver/ndk-build/EXECUTABLE/libs/ceserver-android.zip"
           body: '<time datetime="${{ steps.get-build-info.outputs.isotime }}">${{ steps.get-build-info.outputs.time }}</time>'
           tag: ${{ steps.get-build-info.outputs.major }}.${{ steps.get-build-info.outputs.minor }}.${{ steps.get-build-info.outputs.revision }}-${{ steps.get-build-info.outputs.build }}
           name: "${{ steps.get-build-info.outputs.major }}.${{ steps.get-build-info.outputs.minor }}.${{ steps.get-build-info.outputs.revision }} (Build: ${{ steps.get-build-info.outputs.build }})"
@@ -560,7 +656,8 @@ jobs:
     outputs:
       vs2013: ${{ steps.get-vs2013-paths.outputs.result }}
       xp: ${{ steps.get-xp-paths.outputs.result }}
-      cuda: ${{ steps.get-cuda-paths.outputs.result }}
+      vc141: ${{ steps.get-vc141-paths.outputs.result }}
+      win10sdk: ${{ steps.get-win10sdk-paths.outputs.result }}
     steps:
       - uses: actions/github-script@v7
         id: get-vs2013-paths
@@ -790,6 +887,20 @@ jobs:
           # C:\Windows\SysWOW64\VSD3DRefDebug.dll
           # C:\Windows\SysWOW64\vsd3dwarpdebug.dll
       - uses: actions/github-script@v7
+        id: get-vc141-paths
+        with:
+          script: return process.env.VC141Paths
+          result-encoding: string
+        env:
+          VC141Paths: |
+            C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\VC\vc.tools.hostx*.targetx*.14.16.pkgdef
+            C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\VC\v150
+            C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\14.16
+            C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\Microsoft.VCToolsVersion.v141.default.props
+            C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\Microsoft.VCToolsVersion.v141.default.txt
+            C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.16.27012
+            C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.16.27023
+      - uses: actions/github-script@v7
         id: get-xp-paths
         with:
           script: return process.env.XPPaths
@@ -799,13 +910,213 @@ jobs:
             C:\Program Files (x86)\Microsoft SDKs\Windows\v7.1A
             C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\VC\v150\Platforms\**\PlatformToolsets\v141_xp
       - uses: actions/github-script@v7
-        id: get-cuda-paths
+        id: get-win10sdk-paths
         with:
-          script: return process.env.CUDAPaths
+          script: return process.env.Win10SDKPaths
           result-encoding: string
         env:
-          CUDAPaths: |
-            C:\Program Files\NVIDIA GPU Computing Toolkit
-            C:\Program Files (x86)\MSBuild\Microsoft.Cpp\BuildCustomizations\CUDA*
-            C:\ProgramData\NVIDIA GPU Computing Toolkit
-            ${{ github.workspace }}\CUDA
+          Win10SDKPaths: |
+            C:\Program Files (x86)\Common Files\microsoft shared\Phone Tools\14.0
+            C:\Program Files (x86)\Common Files\Microsoft\ExtensionManager\Extensions\Microsoft\Windows Kits\10\Desktop SDK\extension.vsixmanifest
+            C:\Program Files (x86)\Common Files\Microsoft\ExtensionManager\Extensions\Microsoft\Windows Kits\10\Windows Store SDK\extension.vsixmanifest
+            C:\Program Files (x86)\Microsoft SDKs\Windows Kits\10\ExtensionSDKs\Microsoft.Midi.GmDls\10.0.17763.0
+            C:\Program Files (x86)\Microsoft SDKs\Windows Kits\10\ExtensionSDKs\Microsoft.UniversalCRT.Debug\10.0.17763.0
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\FSRM\v7.0\srmlib.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\MOData\3.0\Microsoft.Management.OData.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\tablet pc\v6.0\sdk\inc\Microsoft.Ink.xml
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.PowerShell.Activities.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.PowerShell.Commands.Management.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.PowerShell.Commands.Utility.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.PowerShell.ConsoleHost.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.PowerShell.Core.Activities.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.PowerShell.Diagnostics.Activities.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.PowerShell.Management.Activities.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.PowerShell.ScheduledJob.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.PowerShell.Security.Activities.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.PowerShell.Security.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.PowerShell.Utility.Activities.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.PowerShell.Workflow.ServiceCore.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\Microsoft.WSMan.Management.Activities.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\System.Management.Automation.dll
+            C:\Program Files (x86)\Reference Assemblies\Microsoft\WMI\v1.0\Microsoft.Management.Infrastructure.dll
+            C:\Program Files (x86)\Windows Kits\10\bin\10.0.14393.0\x*\GenXBF.dll
+            C:\Program Files (x86)\Windows Kits\10\bin\10.0.15063.0\x*\GenXBF.dll
+            C:\Program Files (x86)\Windows Kits\10\bin\10.0.16299.0\x*\genxbf.dll
+            C:\Program Files (x86)\Windows Kits\10\bin\10.0.17134.0\x*\genxbf.dll
+            C:\Program Files (x86)\Windows Kits\10\bin\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\bin\*\XamlDiagnostics\xamldiagnostics.dll
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat05047a45609f311645eebcac2739fc4c.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat05254f60ea43b4e3959b17cdb03268c0.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat07a57cdb41ba28cced14005f087267be.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat08ddd9b0b60fd2d41fc6820296e8bec7.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat0b2a4987421d95d0cb37640889aa9e9b.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat12613ba26e037e99a874a64c1084f880.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat12935c066a7d1cad3255a4a96fc10d84.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat12a529d45b148a2d28290a8a7535b37b.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat13d68b8a7b6678a368e2d13ff4027521.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat15bc5316e373960d82abc253bceaa25d.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat1623efce9d1a46396798f44a7bc769e9.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat16ab2ea2187acffa6435e334796c8c89.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat19248fabbb2098a7b88c4a2786066bcc.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat1a296530f0182ff1e94f088c27d05da0.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat1f32e9acf0bb1e6a5f485cd8670cd8e1.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat2630bae9681db6a9f6722366f47d055c.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat263104e5ce3a72f68151a93d88a3f22f.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat2868a02217691d527e42fe0520627bfa.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat2dd914bb5abd9365f932d15eede09c52.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat2e876dd22fa5e6785f137e3422dd50ec.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat306e26e920fd32cb02bf538b4e799a0d.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat31ec2a68a04d58dc4a3d639fddc68493.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat353be8f91891a6a5761b9ac157fa2ff1.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat4035a83dc8e73244d15d1196d55059c3.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat40d92f424eff54b03db4c51669f9a8d6.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat43d52fdb99b86048e15fbd34f5b99cb5.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat441901505fcd0b2e997ea7d954f04171.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat44fa8dd71f05b5ff459e3312fa93ca6c.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat463ad1b0783ebda908fd6c16a4abfe93.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat4c3ef4b2b1dc72149f979f4243d2accf.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat4c59234340aaf3a96ec480c1aad8d179.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat4e2dea081242e821596b58b31bc22cca.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat4ec14c5368b7642563c070cd168960a8.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat4fe4c8b88812f5339018c0eef95acdb9.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat52a8e5203ade8fe7174c590308f2e44a.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat53174a8154da07099db041b9caffeaee.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat5509e4710313421be8d5e7cfbfde4d30.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat559dbc3a49a69c6adf60b1c87b4df71b.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat563138901adf40a699df4654138ac397.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat56a114848fda9a7e47bad4b3fc4be9a6.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat576cff9c50e8085ab8d9c28ee12bac3e.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat58314d0646d7e1a25e97c902166c3155.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat598442d9f84639d200d4f3af477da95c.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat5a22e5cde814b041749fb271547f4dd5.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat5c2fcb46e03eada0ed0cad44a3f5c71f.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat5f6cfec263cd265cf3b0d97fd78ddf05.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat61d57a7a82309cd161a854a6f4619e52.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat66c7c64126fbf84f47ccec556d149b12.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat67c9fd1fab36154e6e7e429610cd67c8.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat685f3d4691f444bc382762d603a99afc.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat68de71e3e2fb9941ee5b7c77500c0508.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat69661e20556b3ca9456b946c2c881ddd.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat6b12414fdb1b4978419abcd383206c09.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat6b5a91701fdb98ac8bc4af6e238e0390.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat6ee7bbee8435130a869cf971694fd9e2.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat75122a9de1700f465c29b6cc76fa6372.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat766c0ffd568bbb31bf7fb6793383e24a.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat78fa3c824c2c48bd4a49ab5969adaaf7.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat7afc7b670accd8e3cc94cfffd516f5cb.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat7b7c7382fe1ea268787e911da88eb37e.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat7c78679402f1166a189b0d0105d98841.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat8016f7584c8fbeff0b032c65f4173e78.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat80dcdb79b8a5960a384abe5a217a7e3a.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat8125ee239710f33ea485965f76fae646.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat89d9bbd87f7a5560bafa520a4ebfdf17.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat8eec88833ea319aaa1061d6528c77b93.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat90e1202895672ce81992e71be30528cc.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat9126f6ff98d955951fe9323f4444c119.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat931721e121ef91707ddcb6cac354d95c.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat93a74a1d34a22ae9d2e1ccc5208ad21a.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat948a611cd2aca64b1e5113ffb7b95d5f.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat9494c0c1f781298600a3c07e837acd0f.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat96076045170fe5db6d5dcf14b6f6688e.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cat9bcb3fab78e80d68be28892ea7ad46c3.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cata1e2a83aa8a71c48c742eeaff6e71928.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cata330840cf08ad4d210703c9acd1bf2b8.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cata68c0988d16ee124783efd98074dcbf9.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cata99961efa2d32b61d00dce232d2b298b.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catac4ddfcf1101c483559a5f6e36f1ef2d.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catb1a8ecf890b4ffddd05e8c9422f55db7.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catb2f03f34ff83ec013b9e45c7cd8e8a73.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catb4eea6c909a31ab051e6f9b6218beec8.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catb5f177b84c0ec473cbd69557634b27cd.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catb82881a61b7477bd4eb5de2cd5037fe2.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catba60f891debd633ae9c26e1372703e3c.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catbeb5360d2daaa3167dea7ad16c28f996.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catc0aa6d435b0851bf34365aadabd0c20f.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catc1c7e442409c0adbf81ae43aa0e4351f.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catc4d38a2c963178a1a3469ca3d913768e.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catcdea5502a35d09ddfbcda12e3a391dc0.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catd3e405ab232f8aca8c5b6a48a913d6b0.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catde111c3d435b0785b31b28c386ee691f.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cate072b3b3d3164e26b63338dce51862a7.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cate10768bb6e9d0ea730280336b697da66.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cate10f8811d44b50885777f56f8272f66b.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cate24dd258b3bbfa69c0842948fe0dd670.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cate3d1b35aecfccda1b4af6fe5988ac4be.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cate5950ce9ba509b3370ebf328742a5f45.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cate59830bab4961666e8d8c2af1e5fa771.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cate5c4b31ff9997ac5603f4f28cd7df602.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cate6ca40830dc4fe88702bd52900811709.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cate98fa5eb5fee6ce17a7a69d585870b7c.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catec0637c03f99046936d32d51e13a392a.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catec9d39539c27e8cf5ad39bffce00c34e.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cateca0aa33de85194cd50ed6e0aae0156f.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\cated4d1c6b9811d81e3cebc553ae604f0d.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catef4472fd7552490fd759075186ed2ec8.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catf105a73f98cfc88c7b64d8f7b39a474c.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catf4661eda3692e166927c14c96164150a.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catf87007e985bc5453a0f01ed1a5510abe.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catf9b24c8280986c0683fbceca5326d806.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catf9ff50431335056fb4fbac05b8268204.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catfb188eaf5cc836de4d4bce9e52bf8e60.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catfef2cfedd6135e0ed85290b83f3682c3.cat
+            C:\Program Files (x86)\Windows Kits\10\Catalogs\catff8dd5a961e46b5d05906ac4b7a5ba37.cat
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\CommonConfiguration\Neutral\UAP\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\CommonConfiguration\Neutral\uCRT.props
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\090_135inchsurfacepro.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\100_5inchphone.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\101_6inchphone.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\200_8inchtablet.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\201_12inchtablet.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\300_13inchdesktop.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\301_23inchdesktop.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\400_xbox.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\500_surfacehub.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\501_surfacehub.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\600_iot_4_569x320.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\601_iot_10_1024x768.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\602_iot_42_1920x1080.xml
+            C:\Program Files (x86)\Windows Kits\10\DesignTime\UAP\Devices\1033\700_hololens_57_1280x720.xml
+            C:\Program Files (x86)\Windows Kits\10\Extension SDKs\WindowsDesktop\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\Extension SDKs\WindowsMobile\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\Extension SDKs\WindowsTeam\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\Include\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\Lib\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\Licenses\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\Platforms\UAP\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\Redist\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\Redist\D3D\x*\d3dcompiler_47.dll
+            C:\Program Files (x86)\Windows Kits\10\Redist\D3D\x*\d3dcsx_47.dll
+            C:\Program Files (x86)\Windows Kits\10\Redist\D3D\x*\dxcompiler.dll
+            C:\Program Files (x86)\Windows Kits\10\Redist\D3D\x*\dxil.dll
+            C:\Program Files (x86)\Windows Kits\10\Redist\MBN\ar*\microsoft.mbn.dll
+            C:\Program Files (x86)\Windows Kits\10\Redist\MBN\x*\microsoft.mbn.dll
+            C:\Program Files (x86)\Windows Kits\10\References\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\Source\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\UnionMetadata\10.0.17763.0
+            C:\Program Files (x86)\Windows Kits\10\UnionMetadata\Facade\Windows.WinMD
+            C:\Windows\System32\D2D1Debug2.dll
+            C:\Windows\System32\d3d10ref.dll
+            C:\Windows\System32\d3d10sdklayers.dll
+            C:\Windows\System32\d3d11_1sdklayers.dll
+            C:\Windows\System32\d3d11_2sdklayers.dll
+            C:\Windows\System32\d3d11ref.dll
+            C:\Windows\System32\d3d11sdklayers.dll
+            C:\Windows\System32\d3dref9.dll
+            C:\Windows\System32\dxcpl.exe
+            C:\Windows\System32\DXGIDebug.dll
+            C:\Windows\System32\perf_gputiming.dll
+            C:\Windows\System32\ucrtbased.dll
+            C:\Windows\System32\VSD3DRefDebug.dll
+            C:\Windows\SysWOW64\D2D1Debug2.dll
+            C:\Windows\SysWOW64\d3d10ref.dll
+            C:\Windows\SysWOW64\d3d10sdklayers.dll
+            C:\Windows\SysWOW64\d3d11_1sdklayers.dll
+            C:\Windows\SysWOW64\d3d11_2sdklayers.dll
+            C:\Windows\SysWOW64\d3d11ref.dll
+            C:\Windows\SysWOW64\d3d11sdklayers.dll
+            C:\Windows\SysWOW64\d3dref9.dll
+            C:\Windows\SysWOW64\dxcpl.exe
+            C:\Windows\SysWOW64\DXGIDebug.dll
+            C:\Windows\SysWOW64\perf_gputiming.dll
+            C:\Windows\SysWOW64\ucrtbased.dll
+            C:\Windows\SysWOW64\VSD3DRefDebug.dll
