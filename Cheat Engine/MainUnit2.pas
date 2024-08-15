@@ -39,7 +39,7 @@ const
   strTrainer='Trainer';
   strTrainerLower='trainer';
   strMyCheatTables='My Fun Tables';
-  strSpeedHack='Speedhack';
+  strSpeedHack='Funspeed';
 {$endif}
 
 resourcestring
